@@ -29,13 +29,13 @@ probó antes de entregarles el proyecto. La columna **En el video** indica dónd
 | Alta disponibilidad | 2 zonas, ASG mín. 2, reemplazo automático, réplica en otra zona | Configuración validada con `terraform test` | 0:05 y **4:08 (demostración en vivo)** |
 | Seguridad | SG-ALB → SG-App → SG-DB encadenados; sin IP pública; IMDSv2; RDS cifrado | Reglas revisadas en `main.tf` | 0:05 y consola SG |
 | Justifica decisiones | Tabla de justificaciones (sección 2), incorporada al discurso | — | 0:05 |
-| Diagrama completo y consistente | Usuarios, VPC, subredes, ALB, EC2, SG, RDS, S3, CI/CD y flujo de tráfico, con los mismos nombres y CIDR que Terraform | Comparado con `main.tf` y `variables.tf` | 0:05 |
+| Diagrama completo y consistente | Usuarios, VPC, subredes, ALB, EC2, SG, RDS, almacenamiento EBS, CI/CD y flujo de tráfico, con los mismos nombres y CIDR que Terraform | Comparado con `main.tf` y `variables.tf` | 0:05 |
 
 ### Infraestructura como Código (25 %)
 
 | Exigencia "Excelente" | Cómo lo cumple el proyecto | Verificado | En el video |
 |---|---|---|---|
-| Completamente automatizada | Terraform crea los 46 recursos; nada se crea a mano (solo se usa el `LabInstanceProfile` que ya trae Academy) | `terraform test` con proveedor simulado: crea todo sin errores | 2:40 |
+| Completamente automatizada | Terraform crea los 42 recursos; nada se crea a mano (solo se usa el `LabInstanceProfile` que ya trae Academy) | `terraform test` con proveedor simulado: crea todo sin errores | 2:40 |
 | Organizada correctamente | `provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`, `terraform.tfvars.example`, `user_data.sh` | `terraform fmt` y `validate` sin errores | 2:40 |
 | init, plan, apply y output | Se ejecutan los cuatro en vivo; el `apply` hace un cambio real (versión) | `user_data.sh` renderizado y validado con `bash -n` | 2:40 – 4:08 |
 
@@ -90,7 +90,8 @@ probó antes de entregarles el proyecto. La columna **En el video** indica dónd
 | IMDSv2 obligatorio y RDS cifrado | Buenas prácticas de seguridad sin costo adicional. |
 | `user_data` clona el repositorio | Cada instancia nueva arranca con la última versión del código, sin intervención manual. |
 | Instance refresh gradual | El despliegue reemplaza las instancias de una en una, sin cortar el servicio. |
-| Estado de Terraform local | Cada integrante despliega en su propia cuenta; en producción se usaría un backend remoto en S3. |
+| Estado de Terraform local | Cada integrante despliega en su propia cuenta; en producción se usaría un backend remoto. |
+| Almacenamiento en EBS y RDS, sin bucket S3 | AWS Academy bloquea con una política de la organización (SCP) un permiso de lectura que Terraform necesita para gestionar buckets S3; lo comprobamos en el ensayo. El almacenamiento queda en discos EBS gp3 cifrados y en RDS cifrado. |
 
 ---
 
@@ -134,7 +135,7 @@ EC2 → Auto Scaling Groups → dgiti-ef-asg; navegador con `app_url`; editor co
 terminal en la raíz del repositorio.
 
 **Pestañas abiertas, integrante 2:** Learner Lab; GitHub en `ci-cd.yml`; GitHub Secrets; la ejecución
-verde del pipeline; S3 → bucket `dgiti-ef-artifacts-…`; EC2 → Target Groups → dgiti-ef-tg; CloudWatch →
+verde del pipeline; EC2 → Target Groups → dgiti-ef-tg; CloudWatch →
 dashboard `dgiti-ef-dashboard`; Auto Scaling Groups → Activity; **terminal 1** (para k6), **terminal 2**
 (para `check_balancer.sh`) y **terminal 3** con el resultado de la prueba previa.
 
@@ -208,10 +209,10 @@ terraform plan
 
 > "provider.tf define el proveedor AWS, sin credenciales en el código. variables.tf parametriza la
 > red, el ASG, el tipo de instancia y la base de datos; la contraseña es sensible y tiene validación.
-> main.tf crea la red, los Security Groups, RDS con su réplica, S3, el ALB, el Auto Scaling Group y el
+> main.tf crea la red, los Security Groups, RDS con su réplica, el ALB, el Auto Scaling Group y el
 > dashboard de CloudWatch. user_data.sh es lo que ejecuta cada EC2 al arrancar: clona el repositorio y
 > levanta la aplicación. outputs.tf entrega las URLs. El tfvars real no se sube a Git. Todo lo crea
-> Terraform, 46 recursos; nada está hecho a mano."
+> Terraform, 42 recursos; nada está hecho a mano."
 
 Cuando termine el plan:
 
@@ -277,7 +278,7 @@ Con `.github/workflows/ci-cd.yml` abierto, **decir**:
 > Si ambas pasan, la etapa tres prepara el despliegue: se autentica en mi cuenta de AWS Academy con
 > secretos de GitHub y ejecuta terraform plan. La etapa cuatro despliega: hace un instance refresh del
 > Auto Scaling Group para que las instancias nuevas tomen el último commit, corre pruebas de integración
-> contra el balanceador real y guarda los reportes en S3."
+> contra el balanceador real y guarda los reportes como artefactos."
 
 **Hacer:**
 
@@ -288,13 +289,14 @@ Con `.github/workflows/ci-cd.yml` abierto, **decir**:
    - Etapa 1 → *Pruebas unitarias con cobertura*: señalar `15 passed`.
    - Etapa 2 → *terraform validate*: señalar `Success! The configuration is valid.`
    - Etapa 3 → *terraform plan*:
-     > "El plan del pipeline no tiene el estado local, por eso lista los 46 recursos: valida
+     > "El plan del pipeline no tiene el estado local, por eso lista los 42 recursos: valida
      > credenciales, proveedor y configuración antes de desplegar."
    - Etapa 4 → *Desplegar*: señalar `estado=Successful`. Luego *Pruebas de integración*: señalar
      `4 passed`.
      > "Incluida la prueba que verifica que responden al menos dos instancias distintas."
-3. **S3 → dgiti-ef-artifacts-… → ci/** (ejecución más reciente):
-   > "Aquí están los reportes que subió el pipeline."
+3. En la misma ejecución, bajar a **Artifacts** (`reportes-pruebas-unitarias` y
+   `reportes-pruebas-integracion`):
+   > "Los reportes JUnit y de cobertura quedan guardados en cada ejecución."
 
 > ⚠️ **No hagan push a `main` ni usen "Run workflow" durante la grabación.** La etapa 4 reemplazaría
 > instancias en medio de la prueba de carga.

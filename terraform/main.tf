@@ -7,8 +7,6 @@ data "aws_availability_zones" "available" {
   }
 }
 
-data "aws_caller_identity" "current" {}
-
 data "aws_ami" "al2023" {
   most_recent = true
   owners      = ["amazon"]
@@ -269,41 +267,6 @@ resource "aws_db_instance" "replica" {
 }
 
 # =====================================================================
-# ALMACENAMIENTO: bucket S3 privado para reportes de pruebas y de carga
-# =====================================================================
-resource "aws_s3_bucket" "artifacts" {
-  bucket        = "${local.name}-artifacts-${data.aws_caller_identity.current.account_id}"
-  force_destroy = true
-  tags          = { Name = "${local.name}-artifacts" }
-}
-
-resource "aws_s3_bucket_public_access_block" "artifacts" {
-  bucket                  = aws_s3_bucket.artifacts.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts" {
-  bucket = aws_s3_bucket.artifacts.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
-  }
-}
-
-resource "aws_s3_bucket_versioning" "artifacts" {
-  bucket = aws_s3_bucket.artifacts.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-# =====================================================================
 # BALANCEO: Application Load Balancer en subredes publicas
 # =====================================================================
 resource "aws_lb" "app" {
@@ -374,6 +337,19 @@ resource "aws_launch_template" "app" {
     for_each = var.instance_profile_name == "" ? [] : [var.instance_profile_name]
     content {
       name = iam_instance_profile.value
+    }
+  }
+
+  # ALMACENAMIENTO: disco raiz EBS gp3 cifrado en cada instancia.
+  # (AWS Academy bloquea s3:GetBucketObjectLockConfiguration con una SCP, por lo que
+  # Terraform no puede gestionar buckets S3 en el Learner Lab.)
+  block_device_mappings {
+    device_name = "/dev/xvda"
+    ebs {
+      volume_size           = 20
+      volume_type           = "gp3"
+      encrypted             = true
+      delete_on_termination = true
     }
   }
 

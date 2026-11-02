@@ -66,11 +66,6 @@ output "db_replica_endpoint" {
   value       = aws_db_instance.replica.address
 }
 
-output "artifacts_bucket" {
-  description = "Bucket S3 para reportes de pruebas y de carga"
-  value       = aws_s3_bucket.artifacts.bucket
-}
-
 output "cloudwatch_dashboard_url" {
   description = "Dashboard de CloudWatch con metricas del ALB, ASG y RDS"
   value       = "https://${var.aws_region}.console.aws.amazon.com/cloudwatch/home?region=${var.aws_region}#dashboards:name=${aws_cloudwatch_dashboard.main.dashboard_name}"

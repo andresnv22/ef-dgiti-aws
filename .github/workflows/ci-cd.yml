@@ -206,13 +206,6 @@ jobs:
           mkdir -p reports
           pytest -m integration -v --junitxml=reports/junit-integration.xml
 
-      - name: Guardar reportes en S3
-        if: always()
-        run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          aws s3 cp app/reports/ \
-            "s3://${PROJECT_NAME}-artifacts-${ACCOUNT_ID}/ci/run-${{ github.run_number }}/" --recursive
-
       - uses: actions/upload-artifact@v7
         if: always()
         with:

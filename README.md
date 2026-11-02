@@ -49,7 +49,12 @@ El usuario entra por el **Internet Gateway** al **ALB** (subredes públicas). El
 las **EC2 del ASG** (subredes privadas, una por AZ), que escriben en la **RDS primaria** y leen de la
 **réplica** (subredes de datos sin salida a Internet). Las EC2 salen a Internet solo por el
 **NAT Gateway** para descargar el código y las dependencias. **CloudWatch** recoge métricas del ALB,
-ASG y RDS; **S3** guarda los reportes de pruebas. **GitHub Actions** valida, prueba y despliega.
+ASG y RDS; el almacenamiento es **EBS gp3 cifrado** (instancias) y **RDS cifrado** (datos).
+**GitHub Actions** valida, prueba y despliega.
+
+> **¿Por qué no hay bucket S3?** AWS Academy bloquea `s3:GetBucketObjectLockConfiguration` con una
+> política de la organización (SCP). El recurso `aws_s3_bucket` de Terraform necesita ese permiso, así
+> que en el Learner Lab no se puede gestionar S3 con Terraform. Se comprobó con los proveedores 5.x y 6.x.
 
 ---
 
@@ -156,7 +161,7 @@ Etapas del pipeline:
 2. **Validación de Terraform**: `fmt -check`, `init`, `validate`.
 3. **Preparación del despliegue**: `terraform plan` autenticado con los secretos.
 4. **Despliegue**: *instance refresh* gradual del ASG (las nuevas EC2 clonan el último commit),
-   **pruebas de integración** contra el ALB y subida de reportes a S3.
+   **pruebas de integración** contra el ALB. Los reportes quedan como *artifacts* de la ejecución.
 
 En un *pull request* solo corren las etapas 1 y 2, que no usan credenciales.
 
@@ -165,7 +170,7 @@ Para ejecutarlo: haga un commit a `main` o vaya a **Actions → CI-CD → Run wo
 > Los secretos del Learner Lab **vencen al cerrar la sesión**. Actualícelos justo antes de grabar.
 >
 > El plan de la etapa 3 corre sin el *state* local, por eso muestra los recursos a crear
-> (`Plan: 46 to add`): sirve para validar credenciales, proveedor y configuración. El despliegue
+> (`Plan: 42 to add`): sirve para validar credenciales, proveedor y configuración. El despliegue
 > real de la aplicación es la etapa 4.
 
 ### 6. Prueba de carga y monitoreo
@@ -198,12 +203,6 @@ Mientras corre, abra la URL de `terraform output cloudwatch_dashboard_url`:
 
 También: **EC2 → Target Groups → dgiti-ef-tg → Targets** (instancias *healthy*) y
 **EC2 → Auto Scaling Groups → dgiti-ef-asg → Activity** (eventos de escalado).
-
-Guardar el resultado en S3:
-
-```bash
-aws s3 cp loadtest/results/summary.json s3://$(terraform -chdir=terraform output -raw artifacts_bucket)/k6/
-```
 
 Si no tiene k6, Apache Benchmark sirve como alternativa:
 

@@ -1,0 +1,24 @@
+# Copie este archivo como terraform.tfvars y complete los valores.
+# terraform.tfvars esta en .gitignore: NUNCA lo suba al repositorio.
+
+aws_region   = "us-east-1"
+project_name = "dgiti-ef"
+environment  = "academy"
+
+# Repositorio PUBLICO del grupo (las instancias hacen git clone de la carpeta app/)
+repo_url    = "https://github.com/USUARIO/REPOSITORIO.git"
+repo_branch = "main"
+app_version = "1.0.0"
+
+# Computo
+instance_type         = "t3.micro"
+asg_min_size          = 2
+asg_desired_capacity  = 2
+asg_max_size          = 4
+cpu_target_value      = 50
+instance_profile_name = "LabInstanceProfile"
+
+# Base de datos (contrasena: 8 a 41 caracteres, solo letras y numeros)
+db_username       = "appadmin"
+db_password       = "CambieEstaClave2026"
+db_instance_class = "db.t3.micro"

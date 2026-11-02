@@ -1,0 +1,220 @@
+name: CI-CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.11"
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  PROJECT_NAME: ${{ vars.PROJECT_NAME || 'dgiti-ef' }}
+
+jobs:
+  # ------------------------------------------------------------------ 1
+  test:
+    name: 1. Validacion del codigo y pruebas unitarias
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: app/requirements-dev.txt
+
+      - name: Instalar dependencias
+        run: pip install -r requirements-dev.txt
+
+      - name: Analisis estatico (flake8)
+        run: flake8 .
+
+      - name: Pruebas unitarias con cobertura
+        run: |
+          mkdir -p reports
+          pytest -v --junitxml=reports/junit-unit.xml \
+            --cov=app --cov-report=term --cov-report=xml:reports/coverage.xml
+
+      - name: Resumen de pruebas
+        if: always()
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import xml.etree.ElementTree as ET
+          suite = ET.parse("reports/junit-unit.xml").getroot()
+          suite = suite.find("testsuite") if suite.tag == "testsuites" else suite
+          print("### Pruebas unitarias")
+          print(f"- Total: {suite.get('tests')}")
+          print(f"- Fallidas: {suite.get('failures')} | Errores: {suite.get('errors')}")
+          print(f"- Omitidas (integracion): {suite.get('skipped')}")
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reportes-pruebas-unitarias
+          path: app/reports/
+
+  # ------------------------------------------------------------------ 2
+  terraform:
+    name: 2. Validacion de Terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: latest
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: terraform init (sin backend)
+        run: terraform init -backend=false -input=false
+
+      - name: terraform validate
+        run: terraform validate
+
+  # ------------------------------------------------------------------ 3
+  plan:
+    name: 3. Preparacion del despliegue (terraform plan)
+    needs: [test, terraform]
+    if: github.event_name != 'pull_request' && vars.AWS_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    env:
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+      TF_VAR_repo_url: ${{ github.server_url }}/${{ github.repository }}.git
+      TF_VAR_repo_branch: ${{ github.ref_name }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      TF_VAR_project_name: ${{ vars.PROJECT_NAME || 'dgiti-ef' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Credenciales AWS Academy (desde GitHub Secrets)
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verificar identidad
+        run: aws sts get-caller-identity --query Arn --output text
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: latest
+          terraform_wrapper: false
+
+      - name: terraform init
+        run: terraform init -input=false
+
+      - name: terraform plan
+        run: |
+          terraform plan -input=false -no-color -out=tfplan | tee plan.txt
+          {
+            echo "### terraform plan"
+            echo '```'
+            grep -E "^Plan:|No changes" plan.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/plan.txt
+
+  # ------------------------------------------------------------------ 4
+  deploy:
+    name: 4. Despliegue (instance refresh) y pruebas de integracion
+    needs: [plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: app/requirements-dev.txt
+
+      - name: Credenciales AWS Academy (desde GitHub Secrets)
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Desplegar nueva version (rolling instance refresh del ASG)
+        run: |
+          ASG_NAME="${PROJECT_NAME}-asg"
+          if ! REFRESH_ID=$(aws autoscaling start-instance-refresh \
+                --auto-scaling-group-name "$ASG_NAME" \
+                --preferences '{"MinHealthyPercentage":50,"InstanceWarmup":120}' \
+                --query InstanceRefreshId --output text); then
+            echo "Ya hay un instance refresh en curso; se monitorea ese."
+            REFRESH_ID=$(aws autoscaling describe-instance-refreshes \
+              --auto-scaling-group-name "$ASG_NAME" --max-records 1 \
+              --query 'InstanceRefreshes[0].InstanceRefreshId' --output text)
+          fi
+          echo "Instance refresh: $REFRESH_ID"
+          for i in $(seq 1 75); do
+            read -r STATUS PCT < <(aws autoscaling describe-instance-refreshes \
+              --auto-scaling-group-name "$ASG_NAME" --instance-refresh-ids "$REFRESH_ID" \
+              --query 'InstanceRefreshes[0].[Status,PercentageComplete]' --output text)
+            echo "[$i] estado=$STATUS avance=${PCT}%"
+            case "$STATUS" in
+              Successful) exit 0 ;;
+              Failed|Cancelled|RollbackSuccessful|RollbackFailed) exit 1 ;;
+            esac
+            sleep 20
+          done
+          echo "Tiempo de espera agotado"; exit 1
+
+      - name: Obtener URL del balanceador
+        run: |
+          DNS=$(aws elbv2 describe-load-balancers --names "${PROJECT_NAME}-alb" \
+            --query 'LoadBalancers[0].DNSName' --output text)
+          echo "APP_URL=http://$DNS" >> "$GITHUB_ENV"
+          echo "Servicio: http://$DNS" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Pruebas de integracion contra el ALB
+        working-directory: app
+        run: |
+          pip install -r requirements-dev.txt
+          mkdir -p reports
+          pytest -m integration -v --junitxml=reports/junit-integration.xml
+
+      - name: Guardar reportes en S3
+        if: always()
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          aws s3 cp app/reports/ \
+            "s3://${PROJECT_NAME}-artifacts-${ACCOUNT_ID}/ci/run-${{ github.run_number }}/" --recursive
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reportes-pruebas-integracion
+          path: app/reports/

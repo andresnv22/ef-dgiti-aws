@@ -1,0 +1,22 @@
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/terraform.tfvars
+terraform/tfplan
+terraform/plan.txt
+crash.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.coverage
+app/reports/
+
+# Resultados de pruebas de carga
+loadtest/results/
+
+# Sistema
+.DS_Store
